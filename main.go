@@ -14,7 +14,7 @@ import (
 	"github.com/slack-go/slack"
 	"github.com/slack-go/slack/slackevents"
 	"github.com/slack-go/slack/socketmode"
-	clientcmd "k8s.io/client-go/tools/clientcmd"
+	"k8s.io/client-go/tools/clientcmd"
 
 	"github.com/ardaguclu/slack-oc-bot/filemanager"
 )
@@ -101,7 +101,7 @@ func HandleAppMentionEventToBot(event *slackevents.AppMentionEvent, client *slac
 	}
 
 	rgxUpload, _ := regexp.Compile("<@[\\w\\d]+>\\s*upload")
-	rgxOC, _ := regexp.Compile("<@[\\w\\d]+>\\s*(kubectl|oc)")
+	rgxOC, _ := regexp.Compile("<@[\\w\\d]+>\\s*(kubectl|oc) ")
 	if rgxUpload.MatchString(event.Text) {
 		files, _, err := client.GetFiles(slack.GetFilesParameters{
 			User:    user.ID,
@@ -141,7 +141,10 @@ func HandleAppMentionEventToBot(event *slackevents.AppMentionEvent, client *slac
 
 		cmd := exec.Command("oc", parsed...)
 		output, err := cmd.CombinedOutput()
-		return fmt.Sprintf("%s\n```\n%s\n```\n", err, string(output)), nil
+		if err != nil {
+			return fmt.Sprintf("%s\n```\n%s\n```\n", err, string(output)), nil
+		}
+		return fmt.Sprintf("```\n%s\n```\n", string(output)), nil
 	}
 
 	return "", fmt.Errorf("invalid command")
