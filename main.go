@@ -1,12 +1,17 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"github.com/ardaguclu/slack-oc-bot/filemanager"
+	"io"
 	"log"
+	"net/http"
 	"os"
 	"os/exec"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/joho/godotenv"
@@ -20,7 +25,7 @@ func main() {
 	token := os.Getenv("SLACK_AUTH_TOKEN")
 	appToken := os.Getenv("SLACK_APP_TOKEN")
 
-	client := slack.New(token, slack.OptionDebug(true), slack.OptionAppLevelToken(appToken))
+	client := slack.New(token, slack.OptionDebug(false), slack.OptionAppLevelToken(appToken))
 
 	socketClient := socketmode.New(
 		client,
@@ -28,7 +33,7 @@ func main() {
 		socketmode.OptionLog(log.New(os.Stdout, "socketmode: ", log.Lshortfile|log.LstdFlags)),
 	)
 
-	fm := NewFileManager()
+	fm := filemanager.NewFileManager()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -40,11 +45,8 @@ func main() {
 				log.Println("Shutting down socketmode listener")
 				return
 			case event := <-socketClient.Events:
-
 				switch event.Type {
-
 				case socketmode.EventTypeEventsAPI:
-
 					eventsAPI, ok := event.Data.(slackevents.EventsAPIEvent)
 					if !ok {
 						log.Printf("Could not type cast the event to the EventsAPI: %v\n", event)
@@ -60,7 +62,7 @@ func main() {
 	socketClient.Run()
 }
 
-func HandleEventMessage(event slackevents.EventsAPIEvent, client *slack.Client, fm *FileManager) {
+func HandleEventMessage(event slackevents.EventsAPIEvent, client *slack.Client, fm *filemanager.FileManager) {
 	switch event.Type {
 	case slackevents.CallbackEvent:
 
@@ -93,7 +95,7 @@ func HandleEventMessage(event slackevents.EventsAPIEvent, client *slack.Client, 
 	}
 }
 
-func HandleAppMentionEventToBot(event *slackevents.AppMentionEvent, client *slack.Client, fm *FileManager) (string, error) {
+func HandleAppMentionEventToBot(event *slackevents.AppMentionEvent, client *slack.Client, fm *filemanager.FileManager) (string, error) {
 	user, err := client.GetUserInfo(event.User)
 	if err != nil {
 		return "", err
@@ -102,8 +104,7 @@ func HandleAppMentionEventToBot(event *slackevents.AppMentionEvent, client *slac
 	rgxUpload, _ := regexp.Compile("<@[\\w\\d]+>\\s*upload")
 	rgxOC, _ := regexp.Compile("<@[\\w\\d]+>\\s*(kubectl|oc)")
 	if rgxUpload.MatchString(event.Text) {
-		var ts *slack.JSONTime
-		err = ts.UnmarshalJSON([]byte(event.EventTimeStamp))
+		fv, err := strconv.ParseFloat(event.ThreadTimeStamp, 64)
 		if err != nil {
 			return "", err
 		}
@@ -111,7 +112,7 @@ func HandleAppMentionEventToBot(event *slackevents.AppMentionEvent, client *slac
 		files, _, err := client.GetFiles(slack.GetFilesParameters{
 			User:          user.ID,
 			Channel:       event.Channel,
-			TimestampFrom: *ts,
+			TimestampFrom: slack.JSONTime(int64(fv)),
 			Types:         "snippet",
 			Count:         1,
 		})
@@ -120,9 +121,28 @@ func HandleAppMentionEventToBot(event *slackevents.AppMentionEvent, client *slac
 		}
 
 		kubeconfig := files[0]
-		fmt.Println(kubeconfig)
+		response, err := http.Get(kubeconfig.URLPrivateDownload)
+		if err != nil {
+			return "", err
+		}
+		defer response.Body.Close()
 
-		return "", nil
+		if response.StatusCode != http.StatusOK {
+			return "", fmt.Errorf("unexpected status code from server %s", response.Status)
+		}
+
+		buffer := &bytes.Buffer{}
+		_, err = io.Copy(buffer, response.Body)
+		if err != nil {
+			return "", err
+		}
+
+		err = fm.Add(event.Channel, buffer.Bytes())
+		if err != nil {
+			return "", err
+		}
+
+		return "config file is successfully uploaded", nil
 	} else if rgxOC.MatchString(event.Text) {
 		path, err := fm.Get(event.Channel)
 		if err != nil {
