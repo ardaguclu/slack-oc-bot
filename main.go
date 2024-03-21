@@ -4,20 +4,19 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/ardaguclu/slack-oc-bot/filemanager"
-	"io"
 	"log"
-	"net/http"
 	"os"
 	"os/exec"
 	"regexp"
-	"strconv"
 	"strings"
 
 	"github.com/joho/godotenv"
 	"github.com/slack-go/slack"
 	"github.com/slack-go/slack/slackevents"
 	"github.com/slack-go/slack/socketmode"
+	clientcmd "k8s.io/client-go/tools/clientcmd"
+
+	"github.com/ardaguclu/slack-oc-bot/filemanager"
 )
 
 func main() {
@@ -104,35 +103,23 @@ func HandleAppMentionEventToBot(event *slackevents.AppMentionEvent, client *slac
 	rgxUpload, _ := regexp.Compile("<@[\\w\\d]+>\\s*upload")
 	rgxOC, _ := regexp.Compile("<@[\\w\\d]+>\\s*(kubectl|oc)")
 	if rgxUpload.MatchString(event.Text) {
-		fv, err := strconv.ParseFloat(event.ThreadTimeStamp, 64)
-		if err != nil {
-			return "", err
-		}
-
 		files, _, err := client.GetFiles(slack.GetFilesParameters{
-			User:          user.ID,
-			Channel:       event.Channel,
-			TimestampFrom: slack.JSONTime(int64(fv)),
-			Types:         "snippet",
-			Count:         1,
+			User:    user.ID,
+			Channel: event.Channel,
+			Types:   "snippets",
 		})
 		if err != nil || len(files) == 0 {
 			return "", fmt.Errorf("please import valid kubeconfig file or code snippet")
 		}
 
 		kubeconfig := files[0]
-		response, err := http.Get(kubeconfig.URLPrivateDownload)
+		buffer := &bytes.Buffer{}
+		err = client.GetFile(kubeconfig.URLPrivateDownload, buffer)
 		if err != nil {
 			return "", err
 		}
-		defer response.Body.Close()
 
-		if response.StatusCode != http.StatusOK {
-			return "", fmt.Errorf("unexpected status code from server %s", response.Status)
-		}
-
-		buffer := &bytes.Buffer{}
-		_, err = io.Copy(buffer, response.Body)
+		_, err = clientcmd.Load([]byte(buffer.String()))
 		if err != nil {
 			return "", err
 		}
@@ -154,11 +141,7 @@ func HandleAppMentionEventToBot(event *slackevents.AppMentionEvent, client *slac
 
 		cmd := exec.Command("oc", parsed...)
 		output, err := cmd.CombinedOutput()
-		if err != nil {
-			return "", err
-		}
-
-		return fmt.Sprintf("```\n%s\n```\n", string(output)), nil
+		return fmt.Sprintf("%s\n```\n%s\n```\n", err, string(output)), nil
 	}
 
 	return "", fmt.Errorf("invalid command")
