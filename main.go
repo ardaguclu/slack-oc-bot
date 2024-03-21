@@ -52,7 +52,7 @@ func main() {
 						continue
 					}
 					socketClient.Ack(*event.Request)
-					HandleEventMessage(eventsAPI, client, fm)
+					HandleEventMessage(eventsAPI, client, socketClient, fm)
 				}
 			}
 		}
@@ -61,20 +61,20 @@ func main() {
 	socketClient.Run()
 }
 
-func HandleEventMessage(event slackevents.EventsAPIEvent, client *slack.Client, fm *filemanager.FileManager) {
+func HandleEventMessage(event slackevents.EventsAPIEvent, client *slack.Client, socketClient *socketmode.Client, fm *filemanager.FileManager) {
 	switch event.Type {
 	case slackevents.CallbackEvent:
 
 		innerEvent := event.InnerEvent
 		switch ev := innerEvent.Data.(type) {
 		case *slackevents.AppMentionEvent:
-			output, err := HandleAppMentionEventToBot(ev, client, fm)
+			output, err := HandleAppMentionEventToBot(ev, client, socketClient, fm)
 			if err != nil {
 				ts := ev.ThreadTimeStamp
 				if ev.ThreadTimeStamp == "" {
 					ts = ev.TimeStamp
 				}
-				_, _, _, err = client.SendMessage(ev.Channel, slack.MsgOptionTS(ts), slack.MsgOptionText(err.Error(), false))
+				_, _, _, err = socketClient.SendMessage(ev.Channel, slack.MsgOptionTS(ts), slack.MsgOptionText(err.Error(), false))
 				if err != nil {
 					log.Printf("error %v", err)
 				}
@@ -85,7 +85,7 @@ func HandleEventMessage(event slackevents.EventsAPIEvent, client *slack.Client, 
 				if ev.ThreadTimeStamp == "" {
 					ts = ev.TimeStamp
 				}
-				_, _, _, err = client.SendMessage(ev.Channel, slack.MsgOptionTS(ts), slack.MsgOptionText(output, false))
+				_, _, _, err = socketClient.SendMessage(ev.Channel, slack.MsgOptionTS(ts), slack.MsgOptionText(output, false))
 				if err != nil {
 					log.Printf("error %v", err)
 				}
@@ -94,7 +94,7 @@ func HandleEventMessage(event slackevents.EventsAPIEvent, client *slack.Client, 
 	}
 }
 
-func HandleAppMentionEventToBot(event *slackevents.AppMentionEvent, client *slack.Client, fm *filemanager.FileManager) (string, error) {
+func HandleAppMentionEventToBot(event *slackevents.AppMentionEvent, client *slack.Client, socketClient *socketmode.Client, fm *filemanager.FileManager) (string, error) {
 	user, err := client.GetUserInfo(event.User)
 	if err != nil {
 		return "", err
@@ -103,7 +103,7 @@ func HandleAppMentionEventToBot(event *slackevents.AppMentionEvent, client *slac
 	rgxUpload, _ := regexp.Compile("<@[\\w\\d]+>\\s*upload")
 	rgxOC, _ := regexp.Compile("<@[\\w\\d]+>\\s*(kubectl|oc) ")
 	if rgxUpload.MatchString(event.Text) {
-		files, _, err := client.GetFiles(slack.GetFilesParameters{
+		files, _, err := socketClient.GetFiles(slack.GetFilesParameters{
 			User:    user.ID,
 			Channel: event.Channel,
 			Types:   "snippets",
@@ -142,9 +142,9 @@ func HandleAppMentionEventToBot(event *slackevents.AppMentionEvent, client *slac
 		cmd := exec.Command("oc", parsed...)
 		output, err := cmd.CombinedOutput()
 		if err != nil {
-			return fmt.Sprintf("%s\n```\n%s\n```\n", err, string(output)), nil
+			return fmt.Sprintf("%s\n```\n%s\n", err, string(output)), nil
 		}
-		return fmt.Sprintf("```\n%s\n```\n", string(output)), nil
+		return fmt.Sprintf("```\n%s\n", string(output)), nil
 	}
 
 	return "", fmt.Errorf("invalid command")
