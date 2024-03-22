@@ -144,7 +144,7 @@ func HandleAppMentionEventToBot(event *slackevents.AppMentionEvent, client *slac
 		if err != nil {
 			return fmt.Sprintf("%s\n```\n%s\n", err, string(output)), nil
 		}
-		return fmt.Sprintf("```\n%s\n", string(output)), nil
+		return fmt.Sprintf("```\n%s\n```\n", string(output)), nil
 	}
 
 	return "", fmt.Errorf("invalid command")
