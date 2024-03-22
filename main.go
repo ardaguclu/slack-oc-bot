@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -64,11 +65,23 @@ func main() {
 func HandleEventMessage(event slackevents.EventsAPIEvent, client *slack.Client, socketClient *socketmode.Client, fm *filemanager.FileManager) {
 	switch event.Type {
 	case slackevents.CallbackEvent:
-
 		innerEvent := event.InnerEvent
 		switch ev := innerEvent.Data.(type) {
 		case *slackevents.AppMentionEvent:
-			output, err := HandleAppMentionEventToBot(ev, client, socketClient, fm)
+			callback, ok := event.Data.(*slackevents.EventsAPICallbackEvent)
+			var m *slackevents.MessageEvent
+			if ok {
+				d, err := callback.InnerEvent.MarshalJSON()
+				if err != nil {
+					return
+				}
+				err = json.Unmarshal(d, &m)
+				if err != nil {
+					return
+				}
+			}
+
+			output, err := HandleAppMentionEventToBot(ev, client, socketClient, fm, m)
 			if err != nil {
 				ts := ev.ThreadTimeStamp
 				if ev.ThreadTimeStamp == "" {
@@ -94,27 +107,32 @@ func HandleEventMessage(event slackevents.EventsAPIEvent, client *slack.Client, 
 	}
 }
 
-func HandleAppMentionEventToBot(event *slackevents.AppMentionEvent, client *slack.Client, socketClient *socketmode.Client, fm *filemanager.FileManager) (string, error) {
-	user, err := client.GetUserInfo(event.User)
-	if err != nil {
-		return "", err
-	}
-
+func HandleAppMentionEventToBot(event *slackevents.AppMentionEvent, client *slack.Client, socketClient *socketmode.Client, fm *filemanager.FileManager, m *slackevents.MessageEvent) (string, error) {
 	rgxUpload, _ := regexp.Compile("<@[\\w\\d]+>\\s*upload")
 	rgxOC, _ := regexp.Compile("<@[\\w\\d]+>\\s*(kubectl|oc) ")
 	if rgxUpload.MatchString(event.Text) {
-		files, _, err := socketClient.GetFiles(slack.GetFilesParameters{
-			User:    user.ID,
-			Channel: event.Channel,
-			Types:   "snippets",
-		})
-		if err != nil || len(files) == 0 {
-			return "", fmt.Errorf("please import valid kubeconfig file or code snippet")
-		}
+		var kubeconfigURL string
+		if m == nil || len(m.Files) == 0 {
+			user, err := client.GetUserInfo(event.User)
+			if err != nil {
+				return "", err
+			}
 
-		kubeconfig := files[0]
+			files, _, err := socketClient.GetFiles(slack.GetFilesParameters{
+				User:    user.ID,
+				Channel: event.Channel,
+				Types:   "snippets",
+			})
+			if err != nil || len(files) == 0 {
+				return "", fmt.Errorf("please import valid kubeconfig file or code snippet")
+			}
+
+			kubeconfigURL = files[0].URLPrivateDownload
+		} else {
+			kubeconfigURL = m.Files[0].URLPrivateDownload
+		}
 		buffer := &bytes.Buffer{}
-		err = client.GetFile(kubeconfig.URLPrivateDownload, buffer)
+		err := client.GetFile(kubeconfigURL, buffer)
 		if err != nil {
 			return "", err
 		}
