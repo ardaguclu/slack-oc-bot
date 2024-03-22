@@ -137,8 +137,12 @@ func HandleAppMentionEventToBot(event *slackevents.AppMentionEvent, client *slac
 			return "", err
 		}
 
-		_, err = clientcmd.Load([]byte(buffer.String()))
+		cnf, err := clientcmd.Load([]byte(buffer.String()))
 		if err != nil {
+			return "", err
+		}
+
+		if err = clientcmd.Validate(*cnf); err != nil {
 			return "", err
 		}
 
